@@ -1,25 +1,22 @@
 from flask import Blueprint, jsonify
+from app.services.supabase_client import supabase # Import the client we just made
 
-# Define a Blueprint named 'main'.
-# This helps organize routes if you add more files later (e.g., 'auth', 'users').
 main = Blueprint('main', __name__)
 
-@main.route('/api/data', methods=['GET'])
-def get_data():
-    """
-    Route: GET /api/data
-    Description: Returns a simple JSON handshake.
-    """
-    return jsonify({
-        "message": "OK",
-        "status": "success",
-        "payload": "Hello from the separate Backend Repo!"
-    })
-
-@main.route('/api/health', methods=['GET'])
-def health_check():
-    """
-    Route: GET /api/health
-    Description: A standard route for uptime monitors to check if server is alive.
-    """
-    return jsonify({"status": "healthy"})
+@main.route('/api/cities', methods=['GET'])
+def get_cities():
+    try:
+        # Query the 'cities' table in Supabase
+        # .select("*") means "get all columns"
+        response = supabase.table('cities').select("*").execute()
+        
+        # Access the data from the response object
+        data = response.data
+        
+        return jsonify({
+            "status": "success", 
+            "data": data
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
