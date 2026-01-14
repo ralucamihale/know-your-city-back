@@ -43,6 +43,18 @@ def login():
     
     return jsonify({'token': token, 'user_id': str(user.id)})
 
+def write_log(message):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] {message}\n"
+    try:
+        with open("grid_log.txt", "a") as f:
+            f.write(log_entry)
+        print(log_entry.strip()) # Vedem și în consolă
+    except Exception as e:
+        print(f"Eroare scriere log: {e}")
+# ----------------------------------------
+
+
 @main.route('/api/create_grid', methods=['POST'])
 def create_game_grid():
     data = request.get_json()
@@ -100,7 +112,7 @@ def create_game_grid():
     db.session.commit()
 
     return jsonify({'message': 'Grid created!', 'grid_id': new_grid.id, 'status': 'created_new'})
-
+    
 @main.route('/api/explore', methods=['POST'])
 def explore_cell():
     data = request.get_json()
@@ -112,19 +124,7 @@ def explore_cell():
     if not grid:
         return jsonify({'status': 'no_grid'})
 
-    # Luam centrul folosind functii PostGIS sau aproximare
-    # Aici facem query in DB pentru a lua coordonatele centrului
-    # Nota: Pentru MVP simplificam si recalculam distantele in Python
-    # Dar trebuie sa stim centrul. 
-    # Deoarece citirea WKT e complexa direct, vom returna 'unlocked' doar daca gridul exista
-    # Ideal aici ar trebui o logica mai robusta de extragere a punctului din DB.
-    
-    # SIMPLIFICARE PENTRU MVP (Fara interogare complexa de geometrie):
-    # Presupunem ca frontend-ul redeseneaza gridul si calculam relativ la ce stim.
-    # Pentru a face asta corect in backend, avem nevoie de coordonatele centrului:
-    
-    # Varianta Robustă PostGIS:
-    # SQL: ST_X(center_point), ST_Y(center_point)
+    # 1. Luăm coordonatele centrului
     center_query = db.session.query(
         db.func.ST_X(grid.center_point), 
         db.func.ST_Y(grid.center_point)
@@ -132,30 +132,36 @@ def explore_cell():
     
     center_lng = center_query[0]
     center_lat = center_query[1]
-    
     cell_size = grid.cell_size_meters
 
-    # Calcule matematice (Aproximare metri)
+    # 2. Calculăm distanța în metri față de centru
     delta_lat_m = (user_lat - center_lat) * 111320
     delta_lng_m = (user_lng - center_lng) * (40075000 * math.cos(math.radians(center_lat)) / 360)
 
-    row_idx = math.floor(delta_lat_m / cell_size)
-    col_idx = math.floor(delta_lng_m / cell_size)
+    # --- FIX MATEMATIC: Adăugăm jumătate de celulă pentru a centra grid-ul ---
+    # Fără acest fix, gridul e decalat cu 50m (jumătate de pătrat) față de desen
+    row_idx = math.floor((delta_lat_m + (cell_size / 2)) / cell_size)
+    col_idx = math.floor((delta_lng_m + (cell_size / 2)) / cell_size)
+    # ------------------------------------------------------------------------
 
+    # 3. Verificăm limitele (ex: pt 9x9, limit e 4 => indici acceptați -4..+4)
     limit = grid.dimension // 2
-    
-    # Verificam daca e in grid
     if abs(row_idx) > limit or abs(col_idx) > limit:
-        return jsonify({'status': 'out_of_bounds'})
+        # Adăugăm un print ca să vezi în consolă dacă ieși din hartă
+        print(f"DEBUG: Out of bounds! Row={row_idx}, Col={col_idx}, Limit={limit}")
+        return jsonify({'status': 'out_of_bounds', 'row': row_idx, 'col': col_idx})
 
+    # 4. Salvăm în DB
     existing = UnlockedCell.query.filter_by(grid_id=grid.id, row_index=row_idx, col_index=col_idx).first()
     
     if not existing:
         new_cell = UnlockedCell(grid_id=grid.id, row_index=row_idx, col_index=col_idx, message="Explorat!")
         db.session.add(new_cell)
         db.session.commit()
+        print(f"DEBUG: UNLOCKED! {row_idx}, {col_idx}") # Confirmare în consolă
         return jsonify({'status': 'unlocked', 'row': row_idx, 'col': col_idx})
     
+    print(f"DEBUG: Deja vizitat {row_idx}, {col_idx}")
     return jsonify({'status': 'already_visited', 'row': row_idx, 'col': col_idx})
 
 @main.route('/api/grid_by_user/<user_id>', methods=['GET'])
