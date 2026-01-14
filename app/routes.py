@@ -61,70 +61,63 @@ def create_game_grid():
     user_id = data.get('user_id')
     lat = data.get('lat')
     lng = data.get('lng')
-    # Parametru opțional: dacă e True, șterge gridul vechi. Dacă e False, îl păstrează.
-    force_reset = data.get('force_reset', True) 
 
     if not user_id or not lat or not lng:
         return jsonify({'message': 'Missing data'}), 400
 
-    # 1. Verificăm dacă există deja un grid
-    existing_grid = Grid.query.filter_by(user_id=user_id).first()
-
-    if existing_grid and not force_reset:
-        # Dacă există și NU vrem reset, returnăm gridul existent fără să facem nimic
-        return jsonify({
-            'message': 'Grid already exists', 
-            'grid_id': existing_grid.id,
-            'status': 'loaded_existing'
-        })
-
-    # 2. Dacă vrem să recreăm (sau nu există), ștergem tot ce e vechi
-    if existing_grid:
-        # PAS CRITIC: Ștergem întâi celulele dependente (Foreign Key Fix)
-        UnlockedCell.query.filter_by(grid_id=existing_grid.id).delete()
-        # Apoi ștergem grid-ul
-        db.session.delete(existing_grid)
-        db.session.commit()
-
-    # 3. Creăm noul grid
-    center_wkt = f'POINT({lng} {lat})'
+    # 1. Check current grids to enforce limit
+    existing_grids = Grid.query.filter_by(user_id=user_id).all()
     
+    if len(existing_grids) >= 3:
+        return jsonify({'message': 'Maximum limit reached (3/3). Delete a grid first.'}), 400
+
+    # 2. Find the first empty slot (1, 2, or 3)
+    # If we have slots [1, 3], this logic finds 2.
+    occupied_slots = [g.slot_number for g in existing_grids]
+    new_slot = next((i for i in range(1, 4) if i not in occupied_slots), None)
+
+    if new_slot is None:
+        return jsonify({'message': 'Error assigning slot'}), 400
+
+    # 3. Create the new grid
+    center_wkt = f'POINT({lng} {lat})'
     new_grid = Grid(
         user_id=user_id,
+        name=f"Grid #{new_slot}",
+        slot_number=new_slot, # Ensures we fit inside the Check Constraint
         center_point=WKTElement(center_wkt, srid=4326),
-        slot_number=1,
-        dimension=9,         
-        cell_size_meters=100 
+        dimension=9,
+        cell_size_meters=100
     )
     
     db.session.add(new_grid)
-    db.session.flush() # Obținem ID-ul
-
-    # Deblocăm celula de start (0,0)
-    start_cell = UnlockedCell(
-        grid_id=new_grid.id,
-        row_index=0,
-        col_index=0,
-        message="Start Point"
-    )
-    db.session.add(start_cell)
-    
     db.session.commit()
 
-    return jsonify({'message': 'Grid created!', 'grid_id': new_grid.id, 'status': 'created_new'})
+    # Unlock start cell
+    start_cell = UnlockedCell(grid_id=new_grid.id, row_index=0, col_index=0, message="Start Point")
+    db.session.add(start_cell)
     
+    return jsonify({'message': 'Grid created!', 'grid_id': new_grid.id})
+
 @main.route('/api/explore', methods=['POST'])
 def explore_cell():
     data = request.get_json()
     user_lat = data.get('lat')
     user_lng = data.get('lng')
     user_id = data.get('user_id')
+    grid_id = data.get('grid_id') # <--- NEW PARAMETER
     
-    grid = Grid.query.filter_by(user_id=user_id).first()
+    # FIX: Find the SPECIFIC grid by ID, not just any grid belonging to the user
+    if grid_id:
+        grid = Grid.query.filter_by(id=grid_id, user_id=user_id).first()
+    else:
+        # Fallback for old code (optional)
+        grid = Grid.query.filter_by(user_id=user_id).first()
+
     if not grid:
         return jsonify({'status': 'no_grid'})
 
-    # 1. Luăm coordonatele centrului
+    # 1. Get center coordinates
     center_query = db.session.query(
         db.func.ST_X(grid.center_point), 
         db.func.ST_Y(grid.center_point)
@@ -134,48 +127,39 @@ def explore_cell():
     center_lat = center_query[1]
     cell_size = grid.cell_size_meters
 
-    # 2. Calculăm distanța în metri față de centru
+    # 2. Calculate distance in meters
     delta_lat_m = (user_lat - center_lat) * 111320
     delta_lng_m = (user_lng - center_lng) * (40075000 * math.cos(math.radians(center_lat)) / 360)
 
-    # --- FIX MATEMATIC: Adăugăm jumătate de celulă pentru a centra grid-ul ---
-    # Fără acest fix, gridul e decalat cu 50m (jumătate de pătrat) față de desen
+    # 3. Calculate Index
     row_idx = math.floor((delta_lat_m + (cell_size / 2)) / cell_size)
     col_idx = math.floor((delta_lng_m + (cell_size / 2)) / cell_size)
-    # ------------------------------------------------------------------------
 
-    # 3. Verificăm limitele (ex: pt 9x9, limit e 4 => indici acceptați -4..+4)
+    # 4. Check bounds
     limit = grid.dimension // 2
     if abs(row_idx) > limit or abs(col_idx) > limit:
-        # Adăugăm un print ca să vezi în consolă dacă ieși din hartă
-        print(f"DEBUG: Out of bounds! Row={row_idx}, Col={col_idx}, Limit={limit}")
         return jsonify({'status': 'out_of_bounds', 'row': row_idx, 'col': col_idx})
 
-    # 4. Salvăm în DB
+    # 5. Save to DB
     existing = UnlockedCell.query.filter_by(grid_id=grid.id, row_index=row_idx, col_index=col_idx).first()
     
     if not existing:
-        new_cell = UnlockedCell(grid_id=grid.id, row_index=row_idx, col_index=col_idx, message="Explorat!")
+        new_cell = UnlockedCell(grid_id=grid.id, row_index=row_idx, col_index=col_idx, message="Explored")
         db.session.add(new_cell)
         db.session.commit()
-        print(f"DEBUG: UNLOCKED! {row_idx}, {col_idx}") # Confirmare în consolă
         return jsonify({'status': 'unlocked', 'row': row_idx, 'col': col_idx})
     
-    print(f"DEBUG: Deja vizitat {row_idx}, {col_idx}")
     return jsonify({'status': 'already_visited', 'row': row_idx, 'col': col_idx})
 
-@main.route('/api/grid_by_user/<user_id>', methods=['GET'])
-def get_grid_by_user(user_id):
-    # Endpoint nou pentru a lua gridul userului curent
-    grid = Grid.query.filter_by(user_id=user_id).first()
-    if not grid:
-        return jsonify({'has_grid': False})
+@main.route('/api/grid_data/<int:grid_id>', methods=['GET'])
+def get_grid_data(grid_id):
+    grid = Grid.query.get_or_404(grid_id)
         
-    # Luam si celulele deblocate
+    # Get unlocked cells
     cells = UnlockedCell.query.filter_by(grid_id=grid.id).all()
     unlocked_data = [{'row': c.row_index, 'col': c.col_index} for c in cells]
     
-    # Luam centrul
+    # Get center coordinates
     center_query = db.session.query(
         db.func.ST_X(grid.center_point), 
         db.func.ST_Y(grid.center_point)
@@ -184,6 +168,7 @@ def get_grid_by_user(user_id):
     return jsonify({
         'has_grid': True,
         'grid_id': grid.id,
+        'name': grid.name,
         'center_lat': center_query[1],
         'center_lng': center_query[0],
         'dimension': grid.dimension,
@@ -204,3 +189,37 @@ def get_grid_progress(grid_id):
             'msg': cell.message
         })
     return jsonify(results)
+
+@main.route('/api/user_grids/<user_id>', methods=['GET'])
+def get_user_grids(user_id):
+    grids = Grid.query.filter_by(user_id=user_id).order_by(Grid.created_at.desc()).all()
+    results = []
+    for g in grids:
+        results.append({
+            'id': g.id,
+            'name': g.name,
+            'slot': g.slot_number,
+            'dimension': g.dimension,
+            'created_at': g.created_at.strftime("%Y-%m-%d %H:%M")
+        })
+    return jsonify(results)
+
+@main.route('/api/delete_grid/<int:grid_id>', methods=['DELETE'])
+def delete_grid(grid_id):
+    grid = Grid.query.get(grid_id)
+    if not grid:
+        return jsonify({'message': 'Grid not found'}), 404
+
+    # 1. Delete dependent cells first (Foreign Key Fix)
+    UnlockedCell.query.filter_by(grid_id=grid.id).delete()
+
+    # 2. Update user if this was their "active" grid
+    user = User.query.get(grid.user_id)
+    if user.active_grid_id == grid.id:
+        user.active_grid_id = None
+
+    # 3. Delete the grid
+    db.session.delete(grid)
+    db.session.commit()
+
+    return jsonify({'message': 'Grid deleted successfully'})

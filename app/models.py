@@ -12,7 +12,8 @@ class User(db.Model):
     email = db.Column(db.String(255), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     grids = db.relationship('Grid', backref='owner', lazy=True)
-
+    active_grid_id = db.Column(db.BigInteger, nullable=True)
+    
 class Grid(db.Model):
     __tablename__ = 'grids'
     id = db.Column(db.BigInteger, primary_key=True)
@@ -24,6 +25,7 @@ class Grid(db.Model):
     center_point = db.Column(Geometry('POINT', srid=4326), nullable=False)
     dimension = db.Column(db.Integer, default=100)
     cell_size_meters = db.Column(db.Integer, default=50)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
 class UnlockedCell(db.Model):
     __tablename__ = 'unlocked_cells'
