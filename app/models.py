@@ -1,0 +1,28 @@
+from flask_sqlalchemy import SQLAlchemy
+from geoalchemy2 import Geometry
+from sqlalchemy.dialects.postgresql import UUID
+import uuid
+from datetime import datetime
+
+from .extensions import db
+
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email = db.Column(db.String(255), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    grids = db.relationship('Grid', backref='owner', lazy=True)
+
+class Grid(db.Model):
+    __tablename__ = 'grids'
+    id = db.Column(db.BigInteger, primary_key=True)
+    user_id = db.Column(UUID(as_uuid=True), db.ForeignKey('users.id'), nullable=False)
+    center_point = db.Column(Geometry('POINT', srid=4326), nullable=False)
+    dimension = db.Column(db.Integer, default=100)
+    
+class UnlockedCell(db.Model):
+    __tablename__ = 'unlocked_cells'
+    grid_id = db.Column(db.BigInteger, db.ForeignKey('grids.id'), primary_key=True)
+    row_index = db.Column(db.Integer, primary_key=True)
+    col_index = db.Column(db.Integer, primary_key=True)
+    message = db.Column(db.String(255))
