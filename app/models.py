@@ -17,8 +17,13 @@ class Grid(db.Model):
     __tablename__ = 'grids'
     id = db.Column(db.BigInteger, primary_key=True)
     user_id = db.Column(UUID(as_uuid=True), db.ForeignKey('users.id'), nullable=False)
+    
+    # --- COLOANELE NOI ADĂUGATE ---
+    name = db.Column(db.String(50), default='New Grid')
+    slot_number = db.Column(db.SmallInteger, nullable=False) # <--- Asta lipsea
     center_point = db.Column(Geometry('POINT', srid=4326), nullable=False)
     dimension = db.Column(db.Integer, default=100)
+    cell_size_meters = db.Column(db.Integer, default=50)
     
 class UnlockedCell(db.Model):
     __tablename__ = 'unlocked_cells'
