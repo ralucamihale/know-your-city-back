@@ -137,7 +137,6 @@ def explore_cell():
         db.session.add(new_cell)
         db.session.commit()
         
-        # --- UPDATE: Returnam si timpul ---
         return jsonify({
             'status': 'unlocked', 
             'row': row_idx, 
@@ -153,7 +152,6 @@ def get_grid_data(grid_id):
         
     cells = UnlockedCell.query.filter_by(grid_id=grid.id).all()
     
-    # --- UPDATE: Trimitem si message + unlocked_at ---
     unlocked_data = []
     for c in cells:
         time_str = c.unlocked_at.strftime("%Y-%m-%d %H:%M") if c.unlocked_at else "Unknown"
@@ -222,3 +220,31 @@ def get_all_grids_admin():
             'created_at': g.created_at.strftime("%Y-%m-%d %H:%M")
         })
     return jsonify(results)
+
+# --- RUTA NOUA CARE LIPSEA ---
+@main.route('/api/update_message', methods=['PUT'])
+def update_message():
+    data = request.get_json()
+    user_id = data.get('user_id')
+    grid_id = data.get('grid_id')
+    row_idx = data.get('row')
+    col_idx = data.get('col')
+    new_message = data.get('message')
+
+    # Verificari simple
+    grid = Grid.query.filter_by(id=grid_id, user_id=user_id).first()
+    if not grid:
+        return jsonify({'error': 'Unauthorized'}), 403
+
+    cell = UnlockedCell.query.filter_by(
+        grid_id=grid.id, 
+        row_index=row_idx, 
+        col_index=col_idx
+    ).first()
+
+    if cell:
+        cell.message = new_message
+        db.session.commit()
+        return jsonify({'message': 'Updated successfully', 'new_msg': new_message})
+    
+    return jsonify({'error': 'Cell not found'}), 404
