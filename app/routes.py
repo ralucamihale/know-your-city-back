@@ -6,6 +6,7 @@ from geoalchemy2.elements import WKTElement
 import jwt
 import datetime
 import math
+from sqlalchemy import func
 
 main = Blueprint('main', __name__)
 SECRET_KEY = "cheie_secreta_pentru_proiect_isi" 
@@ -248,3 +249,45 @@ def update_message():
         return jsonify({'message': 'Updated successfully', 'new_msg': new_message})
     
     return jsonify({'error': 'Cell not found'}), 404
+
+# --- RUTA DASHBOARD STATS ---
+@main.route('/api/stats', methods=['GET'])
+def get_dashboard_stats():
+    # 1. Statistici simple
+    total_users = db.session.query(func.count(User.id)).scalar()
+    total_grids = db.session.query(func.count(Grid.id)).scalar()
+    total_cells = db.session.query(func.count(UnlockedCell.grid_id)).scalar()
+
+    # 2. Statistici pentru Grafic (Ultimele 7 zile)
+    # Group by date(unlocked_at)
+    from datetime import timedelta
+    
+    seven_days_ago = datetime.datetime.now() - timedelta(days=7)
+    
+    # Query complex: Selecteaza data si numara celulele, grupate pe data
+    results = db.session.query(
+        func.date(UnlockedCell.unlocked_at), 
+        func.count(UnlockedCell.grid_id)
+    ).filter(
+        UnlockedCell.unlocked_at >= seven_days_ago
+    ).group_by(
+        func.date(UnlockedCell.unlocked_at)
+    ).all()
+    
+    # Formatam datele pentru Recharts (array de obiecte)
+    chart_data = []
+    for date_obj, count in results:
+        chart_data.append({
+            "date": date_obj.strftime('%Y-%m-%d'),
+            "explored": count
+        })
+        
+    # Sortam dupa data ca sa arate bine graficul
+    chart_data.sort(key=lambda x: x['date'])
+
+    return jsonify({
+        'total_users': total_users,
+        'total_grids': total_grids,
+        'total_cells': total_cells,
+        'chart_data': chart_data
+    })
