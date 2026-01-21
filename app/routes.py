@@ -49,6 +49,10 @@ def create_game_grid():
     user_id = data.get('user_id')
     lat = data.get('lat')
     lng = data.get('lng')
+    
+    # --- MODIFICARE: Citim dimensiunea sau punem default 9 (Mediu) ---
+    dimension = data.get('dimension', 9) 
+    # -----------------------------------------------------------------
 
     if not user_id or not lat or not lng:
         return jsonify({'message': 'Missing data'}), 400
@@ -63,20 +67,24 @@ def create_game_grid():
     if new_slot is None:
         return jsonify({'message': 'Error assigning slot'}), 400
 
+    # Determinam numele in functie de marime pentru claritate
+    size_label = "Medium"
+    if dimension < 9: size_label = "Small"
+    if dimension > 9: size_label = "Large"
+
     center_wkt = f'POINT({lng} {lat})'
     new_grid = Grid(
         user_id=user_id,
-        name=f"Grid #{new_slot}",
+        name=f"Mission #{new_slot} ({size_label})", # Punem marimea in nume
         slot_number=new_slot,
         center_point=WKTElement(center_wkt, srid=4326),
-        dimension=9,
+        dimension=dimension, # <--- Salvam dimensiunea aleasa
         cell_size_meters=100
     )
     
     db.session.add(new_grid)
     db.session.commit()
 
-    # Start cell
     start_cell = UnlockedCell(
         grid_id=new_grid.id, 
         row_index=0, 
