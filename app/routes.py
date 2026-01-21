@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from .extensions import db
 from .models import User, Grid, UnlockedCell
 from werkzeug.security import generate_password_hash, check_password_hash
-from geoalchemy2.elements import WKTElement  # <--- IMPORT NOU
+from geoalchemy2.elements import WKTElement
 import jwt
 import datetime
 import math
@@ -10,7 +10,7 @@ import math
 main = Blueprint('main', __name__)
 SECRET_KEY = "cheie_secreta_pentru_proiect_isi" # Schimbati in productie
 
-# Task 2: Management utilizatori (Register/Login) [cite: 73]
+# Task 2: Management utilizatori (Register/Login)
 @main.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -22,9 +22,6 @@ def register():
     db.session.add(new_user)
     db.session.commit()
     
-    # NOTA: Am scos crearea automata a grid-ului de aici.
-    # Acum grid-ul se face manual prin butonul din aplicatie.
-
     return jsonify({'message': 'User created successfully'}), 201
 
 @main.route('/api/login', methods=['POST'])
@@ -35,13 +32,17 @@ def login():
     if not user or not check_password_hash(user.password_hash, data['password']):
         return jsonify({'message': 'Login failed'}), 401
     
-    # Returnam si user_id ca sa stie frontend-ul cine esti
+    # Returnam user_id SI is_admin
     token = jwt.encode({
         'user_id': str(user.id),
         'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=24)
     }, SECRET_KEY, algorithm="HS256")
     
-    return jsonify({'token': token, 'user_id': str(user.id)})
+    return jsonify({
+        'token': token, 
+        'user_id': str(user.id),
+        'is_admin': user.is_admin  # <--- LINIA NOUA IMPORTANTA
+    })
 
 def write_log(message):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -49,11 +50,11 @@ def write_log(message):
     try:
         with open("grid_log.txt", "a") as f:
             f.write(log_entry)
-        print(log_entry.strip()) # Vedem și în consolă
+        print(log_entry.strip()) 
     except Exception as e:
         print(f"Eroare scriere log: {e}")
-# ----------------------------------------
 
+# ----------------------------------------
 
 @main.route('/api/create_grid', methods=['POST'])
 def create_game_grid():
@@ -72,7 +73,6 @@ def create_game_grid():
         return jsonify({'message': 'Maximum limit reached (3/3). Delete a grid first.'}), 400
 
     # 2. Find the first empty slot (1, 2, or 3)
-    # If we have slots [1, 3], this logic finds 2.
     occupied_slots = [g.slot_number for g in existing_grids]
     new_slot = next((i for i in range(1, 4) if i not in occupied_slots), None)
 
@@ -84,7 +84,7 @@ def create_game_grid():
     new_grid = Grid(
         user_id=user_id,
         name=f"Grid #{new_slot}",
-        slot_number=new_slot, # Ensures we fit inside the Check Constraint
+        slot_number=new_slot,
         center_point=WKTElement(center_wkt, srid=4326),
         dimension=9,
         cell_size_meters=100
@@ -105,13 +105,11 @@ def explore_cell():
     user_lat = data.get('lat')
     user_lng = data.get('lng')
     user_id = data.get('user_id')
-    grid_id = data.get('grid_id') # <--- NEW PARAMETER
+    grid_id = data.get('grid_id')
     
-    # FIX: Find the SPECIFIC grid by ID, not just any grid belonging to the user
     if grid_id:
         grid = Grid.query.filter_by(id=grid_id, user_id=user_id).first()
     else:
-        # Fallback for old code (optional)
         grid = Grid.query.filter_by(user_id=user_id).first()
 
     if not grid:
@@ -155,11 +153,9 @@ def explore_cell():
 def get_grid_data(grid_id):
     grid = Grid.query.get_or_404(grid_id)
         
-    # Get unlocked cells
     cells = UnlockedCell.query.filter_by(grid_id=grid.id).all()
     unlocked_data = [{'row': c.row_index, 'col': c.col_index} for c in cells]
     
-    # Get center coordinates
     center_query = db.session.query(
         db.func.ST_X(grid.center_point), 
         db.func.ST_Y(grid.center_point)
@@ -176,10 +172,8 @@ def get_grid_data(grid_id):
         'unlocked_cells': unlocked_data
     })
 
-# Task 3 & 7: Logică spațială și returnare date grid [cite: 74, 78]
 @main.route('/api/grid/<int:grid_id>', methods=['GET'])
 def get_grid_progress(grid_id):
-    # Returnăm celulele deblocate pentru a fi desenate pe hartă
     unlocked = UnlockedCell.query.filter_by(grid_id=grid_id).all()
     results = []
     for cell in unlocked:
@@ -210,16 +204,30 @@ def delete_grid(grid_id):
     if not grid:
         return jsonify({'message': 'Grid not found'}), 404
 
-    # 1. Delete dependent cells first (Foreign Key Fix)
     UnlockedCell.query.filter_by(grid_id=grid.id).delete()
 
-    # 2. Update user if this was their "active" grid
     user = User.query.get(grid.user_id)
     if user.active_grid_id == grid.id:
         user.active_grid_id = None
 
-    # 3. Delete the grid
     db.session.delete(grid)
     db.session.commit()
 
     return jsonify({'message': 'Grid deleted successfully'})
+
+# --- RUTA NOUA PENTRU ADMIN ---
+@main.route('/api/admin/all_grids', methods=['GET'])
+def get_all_grids_admin():
+    # Returnam TOATE grid-urile din baza de date, indiferent de user
+    grids = db.session.query(Grid, User.email).join(User, Grid.user_id == User.id).all()
+    
+    results = []
+    for g, email in grids:
+        results.append({
+            'id': g.id,
+            'name': f"{g.name} (by {email})",
+            'slot': g.slot_number,
+            'dimension': g.dimension,
+            'created_at': g.created_at.strftime("%Y-%m-%d %H:%M")
+        })
+    return jsonify(results)

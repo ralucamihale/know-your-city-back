@@ -11,6 +11,9 @@ class User(db.Model):
     id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = db.Column(db.String(255), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
+
+    is_admin = db.Column(db.Boolean, default=False)
+    
     grids = db.relationship('Grid', backref='owner', lazy=True)
     active_grid_id = db.Column(db.BigInteger, nullable=True)
     
