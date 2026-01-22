@@ -1,0 +1,7 @@
+flask
+flask-cors
+flask-sqlalchemy
+python-dotenv
+geoalchemy2
+psycopg2-binary
+pyjwt
